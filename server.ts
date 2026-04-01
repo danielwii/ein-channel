@@ -957,6 +957,7 @@ async function handleInbound(
         ...(msgId != null ? { message_id: String(msgId) } : {}),
         user: from.username ?? String(from.id),
         user_id: String(from.id),
+        display_name: [from.first_name, from.last_name].filter(Boolean).join(' ') || String(from.id),
         ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
         ...(imagePath ? { image_path: imagePath } : {}),
         ...(attachment ? {
