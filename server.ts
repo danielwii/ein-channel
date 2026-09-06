@@ -22,6 +22,7 @@ import { randomBytes } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync } from 'fs'
 import { homedir } from 'os'
 import { join, extname, sep } from 'path'
+import { createMeshBridge } from './mesh-bridge'
 
 const STATE_DIR = process.env.TELEGRAM_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'telegram')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
@@ -73,6 +74,16 @@ const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 
 const bot = new Bot(TOKEN)
 let botUsername = ''
+const mesh = createMeshBridge(STATE_DIR, async (chat, text, replyTo) => {
+  assertAllowedChat(chat)
+  const sent = await bot.api.sendMessage(chat, text, replyTo === undefined
+    ? {} : { reply_parameters: { message_id: replyTo } })
+  return sent.message_id
+})
+const meshTimer = setInterval(() => {
+  mesh.maintainTunnels(WEBHOOK_PORT)
+  void mesh.drain().catch(() => {})
+}, 10000)
 
 type PendingEntry = {
   senderId: string
@@ -644,6 +655,8 @@ let shuttingDown = false
 function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
+  clearInterval(meshTimer)
+  mesh.close()
   process.stderr.write('telegram channel: shutting down\n')
   // bot.stop() signals the poll loop to end; the current getUpdates request
   // may take up to its long-poll timeout to return. Force-exit after 2s.
@@ -907,6 +920,14 @@ async function handleInbound(
   const chat_id = String(ctx.chat!.id)
   const msgId = ctx.message?.message_id
 
+  // Bind replies before the permission-command interceptor: a quoted decision
+  // for another role must never become a local Claude tool permission response.
+  if (msgId !== undefined && await mesh.inbound({
+    chat: chat_id, user: String(from.id), id: msgId,
+    replyTo: ctx.message?.reply_to_message?.message_id, text,
+    attachment: Boolean(attachment || downloadImage),
+  })) return
+
   // Permission-reply intercept: if this looks like "yes xxxxx" for a
   // pending permission request, emit the structured event instead of
   // relaying as chat. The sender is already gate()-approved at this point
@@ -955,6 +976,7 @@ async function handleInbound(
       meta: {
         chat_id,
         ...(msgId != null ? { message_id: String(msgId) } : {}),
+        ...(ctx.message?.reply_to_message ? { reply_to_message_id: String(ctx.message.reply_to_message.message_id) } : {}),
         user: from.username ?? String(from.id),
         user_id: String(from.id),
         display_name: [from.first_name, from.last_name].filter(Boolean).join(' ') || String(from.id),
@@ -992,6 +1014,7 @@ Bun.serve({
 
   async fetch(req) {
     const url = new URL(req.url)
+    if (url.pathname.startsWith('/mesh/')) return mesh.http(req)
 
     // Health check — shows all source statuses
     if (url.pathname === '/health') {

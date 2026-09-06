@@ -1,5 +1,36 @@
 # Telegram
 
+## Iris Mesh 单 Bot 回复试运行
+
+在现有 Telegram 接收端中增加消息关联，不启动第二个 Bot 轮询器。
+`mesh.ts notify` 发出的通知绑定负责人、事项链接和方案版本；Daniel 回复原消息后，
+程序核对配置中的 Telegram 用户和聊天身份，将原文排队投递给已登记的 Herdr Agent。
+接收方通过回信接口回答，后续回复仍保持同一事项关联。
+
+```sh
+bun mesh.ts notify /absolute/path/notification.json
+bun mesh.ts status
+bun test mesh-bridge.test.ts
+```
+
+通知 JSON 字段：`route`、`issue`（URL）、`version`、`text`。
+本机配置在 `~/.claude/channels/telegram/mesh.json`，投递记录在同目录 `mesh.sqlite`；
+两者都是私有运行状态，不能提交。配置包含唯一 `user_id`、`chat_id`、本地 API 的
+`api_key` 及 `routes`。每个 route 包含 `label`、`herdr`、`session`、`agent`、
+`terminal_id`、`callback`，远端另含 `ssh`。发送前通过 Herdr 重新核对目标。
+
+远端回信使用仅监听 loopback 的 SSH 反向转发，由接收进程维护，不向远端复制 Bot token。
+每次投递生成仅供该次答复的 receipt；回信接口确认发送到 TG 后才返回 `sent`。
+忙碌或暂时不可达的收件人每 10 秒检查一次，没有模型调用；不确定是否已投递的消息保留为
+`uncertain`，不会自动重复投递。状态 `dispatched` 只表示 Herdr 接受，`replied` 表示
+收件方实际调用回信接口且 TG 发送成功，不代表业务工作验收。
+
+当前边界：只验证文字、回复明确通知、通讯测试，不执行业务变更。无关联消息继续走原来的
+Claude Channel；没有实现自由点名路由、自动审批或 Hub 决策同步。进程生命周期仍由当前
+Claude MCP 会话管理；本次不新增独立守护服务。目标 Agent 重建或更换后需重新核对绑定。
+
+---
+
 Connect a Telegram bot to your Claude Code with an MCP server.
 
 The MCP server logs into Telegram as a bot and provides tools to Claude to reply, react, or edit messages. When you message the bot, the server forwards the message to your Claude Code session.
